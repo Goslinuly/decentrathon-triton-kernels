@@ -1,0 +1,11 @@
+data/
+runs/
+runs_*/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+.env
+.DS_Store

@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Triton Kernels on T4</title>
+<meta name="description" content="Custom Triton kernels that make LoRA fine-tuning of Qwen2.5-1.5B (NF4) on a Kaggle T4 1.7x faster with 4.9x less GPU memory. Decentrathon 6.0, team Hahathon Devs.">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #fcfcfb; --surface: #ffffff; --border: #e4e3df;
+  --text: #0b0b0b; --text-2: #52514e; --muted: #7a7974;
+  --accent: #2a78d6; --base: #eb6834; --grid: #ecebe7;
+  --code-bg: #f3f2ef;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #141413; --surface: #1a1a19; --border: #2e2e2c;
+    --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e88;
+    --accent: #3987e5; --base: #d95926; --grid: #2a2a28;
+    --code-bg: #232321;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141413; --surface: #1a1a19; --border: #2e2e2c;
+  --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e88;
+  --accent: #3987e5; --base: #d95926; --grid: #2a2a28;
+  --code-bg: #232321;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+html, body { overflow-x: hidden; }
+main { max-width: 920px; margin: 0 auto; padding: 48px 16px 64px; }
+h1 { font-size: clamp(1.8rem, 4.5vw, 2.6rem); line-height: 1.15; margin: 0 0 12px; letter-spacing: -0.02em; }
+h2 { font-size: 1.35rem; margin: 48px 0 12px; }
+p { color: var(--text-2); margin: 0 0 12px; }
+a { color: var(--accent); }
+code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+.eyebrow { color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+.lede { font-size: 1.1rem; max-width: 70ch; }
+.links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.btn { display: inline-block; padding: 9px 16px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); text-decoration: none; font-weight: 600; font-size: 0.95rem; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); gap: 12px; margin-top: 32px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+.tile .v { font-size: clamp(1.5rem, 6vw, 2rem); font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.tile .l { color: var(--text-2); font-size: 0.9rem; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-top: 12px; }
+.card h3 { margin: 0 0 4px; font-size: 1rem; }
+.card .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 10px; }
+.legend { display: flex; gap: 16px; font-size: 0.85rem; color: var(--text-2); margin-bottom: 6px; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; background: var(--c); }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 12px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { font-family: inherit; }
+.tip { position: fixed; pointer-events: none; background: var(--text); color: var(--bg); font-size: 0.8rem;
+  padding: 5px 8px; border-radius: 6px; opacity: 0; transition: opacity .1s; white-space: nowrap; z-index: 9; }
+table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+.callout { border-left: 3px solid var(--accent); padding: 10px 16px; background: var(--surface); border-radius: 0 8px 8px 0; margin: 16px 0; }
+.callout p { margin: 0; }
+details summary { cursor: pointer; color: var(--text-2); font-size: 0.9rem; margin-top: 8px; }
+footer { margin-top: 56px; color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--border); padding-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Decentrathon 6.0 · Soup Kernel Challenge · team Hahathon Devs</div>
+  <h1>Custom Triton kernels for LoRA fine-tuning on a free T4</h1>
+  <p class="lede">Fine-tuning Qwen2.5-1.5B-Instruct (4-bit NF4, LoRA r=16) with <code>soup train</code> on a Kaggle T4:
+    the same adapter, <strong>1.7x faster</strong> and with <strong>4.9x less peak GPU memory</strong>,
+    by replacing the work around the matmuls with eight hand-written Triton kernels.</p>
+  <div class="links">
+    <a class="btn primary" href="https://github.com/Goslinuly/decentrathon-triton-kernels">Code on GitHub</a>
+    <a class="btn" href="https://github.com/Goslinuly/decentrathon-triton-kernels/tree/main/solution">Kernels (solution/)</a>
+    <a class="btn" href="https://github.com/Goslinuly/decentrathon-triton-kernels/blob/main/templates/kaggle_notebook.ipynb">Kaggle notebook</a>
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="v">1.70x</div><div class="l">faster end-to-end<br>94.5 s → 55.6 s</div></div>
+    <div class="tile"><div class="v">4.90x</div><div class="l">less peak GPU memory<br>14 345 → 2 929 MiB</div></div>
+    <div class="tile"><div class="v">+0.000%</div><div class="l">eval loss vs baseline<br>2.04965 → 2.04966</div></div>
+    <div class="tile"><div class="v">10 / 10</div><div class="l">organizers' rule checks pass</div></div>
+  </div>
+
+  <h2>Benchmark</h2>
+  <p>Kaggle T4, organizers' harness, final version, one run per side. Training-step speedup is larger (2.17x on the
+    median step) because ~22 s of every run is model loading, identical for both sides.</p>
+  <div class="charts">
+    <div class="card">
+      <h3>Wall time, seconds</h3><div class="sub">lower is better</div>
+      <div class="legend"><span style="--c:var(--base)">Baseline Soup</span><span style="--c:var(--accent)">Ours</span></div>
+      <svg id="c-time" role="img" aria-label="Wall time: whole run 94.5 s baseline vs 55.6 s ours; 64 training steps 61.4 s vs 33.0 s"></svg>
+    </div>
+    <div class="card">
+      <h3>Peak GPU memory, MiB</h3><div class="sub">lower is better · T4 has 15 360 MiB</div>
+      <div class="legend"><span style="--c:var(--base)">Baseline Soup</span><span style="--c:var(--accent)">Ours</span></div>
+      <svg id="c-mem" role="img" aria-label="Peak memory: 14 345 MiB baseline vs 2 929 MiB ours"></svg>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Peak memory across versions, MiB</h3><div class="sub">each version includes all previous changes</div>
+    <svg id="c-hist" role="img" aria-label="Peak memory by version, from 14 345 MiB baseline to 2 929 MiB in v11"></svg>
+    <details><summary>Show as table</summary><div class="scroll"><table id="t-hist"><thead><tr><th>Version</th><th>Added</th><th>Peak, MiB</th><th>Time, s</th></tr></thead><tbody></tbody></table></div></details>
+  </div>
+  <p style="margin-top:12px">Jury-like check on other data rows (seed 7, two runs per side): 88.2 s / 14 369 MiB vs
+    <strong>56.4 s / 3 145 MiB</strong>, so 1.56x faster and 4.57x lighter. The baseline's load time varies between Kaggle sessions,
+    so single-run speedups of the same code ranged 1.55–1.74x; memory is deterministic.</p>
+
+  <h2>The key finding</h2>
+  <div class="callout"><p><strong>Triton 3.6 does not use the T4's tensor cores</strong> (sm_75, upstream issue triton-lang/triton#5066).
+    Our first fused LM head with <code>tl.dot</code> was 9x slower than the baseline: 359 ms vs 15 ms for the same matmul in cuBLAS.
+    So every matmul stays in cuBLAS, and Triton takes over everything around them.</p></div>
+  <p>Baseline profile: 44% of GPU time in element-wise ops and dtype casts, 7% in softmax/cross-entropy over a
+    151 936-token vocabulary (with gigabytes of fp32 logits), 5% in NF4 dequantization. Memory peaked at 14.3 of 15 GB.</p>
+
+  <h2>The eight kernels</h2>
+  <div class="card scroll">
+    <table>
+      <thead><tr><th>Kernel</th><th>Replaces / why</th></tr></thead>
+      <tbody>
+        <tr><td><code>head_ce_rows_kernel</code></td><td>The full <code>[tokens, vocab]</code> fp32 logits + cross-entropy + entropy/accuracy metrics + per-row losses. Online softmax per row over 256-row chunks; the gradient is written over the chunk in place. The biggest memory win.</td></tr>
+        <tr><td><code>rmsnorm_fwd/bwd_kernel</code></td><td><code>Qwen2RMSNorm</code>: ~6 PyTorch kernels per call, 57 norms per step, now one kernel each way; backward input kept in fp16.</td></tr>
+        <tr><td><code>nf4_dequant_kernel</code></td><td>bitsandbytes' two-kernel NF4 double-quant dequantization, fused into one kernel for forward and backward of every 4-bit layer.</td></tr>
+        <tr><td><code>swiglu8_fwd/bwd_kernel</code></td><td>SwiGLU MLP; the activations saved for backward are compressed to int8 with one fp32 scale per 64 values.</td></tr>
+        <tr><td><code>lora_dropout_fwd/bwd_kernel</code></td><td>LoRA dropout on q/v projections over packed rows, using the baseline's RNG masks stored as bits; the whole LoRA branch is one autograd node.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-top:12px">Supporting changes without Triton: the decoder stack runs only on non-padding rows with one varlen
+    attention call per layer, a lossless fp16 tied embedding (−933 MB), CPU–GPU syncs moved to the end of the step, and background
+    kernel precompilation plus GPU warm-up while the model loads. The training task is unchanged: same model, data, batches,
+    LoRA config, optimizer and outputs, verified by the organizers' rule checker.</p>
+
+  <h2>Reproduce</h2>
+  <p>Import <code>templates/kaggle_notebook.ipynb</code> into Kaggle, set <strong>Accelerator: GPU T4 x2</strong> and <strong>Internet: on</strong>,
+    then Run All (~10 minutes). It trains the baseline and the solution, evaluates both adapters and runs all checks.</p>
+
+  <footer>
+    Built at Decentrathon 6.0 (Oct 30–31, 2026) by team Hahathon Devs · page and code by
+    <a href="https://github.com/Goslinuly">Nursultan Dauletkan</a> · Apache-2.0, built on the organizers'
+    <a href="https://github.com/MakazhanAlpamys/soup-kernel-challenge">soup-kernel-challenge</a> starter kit.
+  </footer>
+</main>
+<div class="tip" id="tip"></div>
+<script>
+(function () {
+  const NS = "http://www.w3.org/2000/svg";
+  const tip = document.getElementById("tip");
+  function el(tag, attrs, parent) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function hover(node, text) {
+    node.addEventListener("mousemove", ev => { tip.textContent = text; tip.style.opacity = 1;
+      tip.style.left = Math.min(ev.clientX + 12, innerWidth - tip.offsetWidth - 8) + "px"; tip.style.top = (ev.clientY + 12) + "px"; });
+    node.addEventListener("mouseleave", () => { tip.style.opacity = 0; });
+  }
+  const fmt = (v, unit) => v.toLocaleString("en-US").replace(/,/g, " ") + unit;
+
+  // Grouped horizontal bars: groups of [baseline, ours]
+  function bars(id, groups, unit, max) {
+    const svg = document.getElementById(id);
+    const W = 420, labelW = 0, rowH = 22, gap = 2, groupGap = 30, top = 4;
+    const H = top + groups.length * (rowH * 2 + gap + groupGap);
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const plotW = W - 92;
+    let y = top;
+    groups.forEach(g => {
+      el("text", { x: 0, y: y + 12, fill: "var(--text-2)", "font-size": 13 }, svg).textContent = g.name;
+      y += 18;
+      [["Baseline", g.base, "var(--base)"], ["Ours", g.ours, "var(--accent)"]].forEach(([who, v, c], i) => {
+        const w = Math.max(4, v / max * plotW);
+        const yy = y + i * (rowH + gap);
+        const hit = el("rect", { x: 0, y: yy - 1, width: plotW + 92, height: rowH + 2, fill: "transparent" }, svg);
+        el("rect", { x: 0, y: yy, width: w, height: rowH, rx: 4, fill: c }, svg);
+        el("text", { x: w + 6, y: yy + rowH / 2 + 4.5, fill: "var(--text)", "font-size": 13, "font-weight": i ? 700 : 400 }, svg).textContent = fmt(v, unit);
+        hover(hit, `${g.name}, ${who}: ${fmt(v, unit)}`);
+      });
+      y += rowH * 2 + gap + groupGap - 18;
+    });
+  }
+  bars("c-time", [
+    { name: "Whole soup train run", base: 94.5, ours: 55.6 },
+    { name: "64 training steps", base: 61.4, ours: 33.0 },
+  ], " s", 94.5);
+  bars("c-mem", [
+    { name: "Task rows (final run)", base: 14345, ours: 2929 },
+    { name: "Jury-like rows", base: 14369, ours: 3145 },
+  ], " MiB", 14369);
+
+  // Version history: memory line
+  const hist = [
+    ["base", "Baseline Soup 0.77.0", 14345, "76–84"],
+    ["v1", "fused head, RMSNorm, NF4", 8525, "72.3"],
+    ["v2", "packed layers, fp16 embedding", 4637, "56.7"],
+    ["v3", "int8 SwiGLU", 4047, "56.9"],
+    ["v4", "Triton precompilation", 4047, "54.6"],
+    ["v5", "fp16 RMSNorm input, head chunk 256", 3767, "54.8"],
+    ["v6", "packed LoRA dropout", 3343, "54.9"],
+    ["v7", "varlen attention", 3335, "54.3"],
+    ["v8", "syncs moved to step end", 3335, "52.0"],
+    ["v9", "bf16→fp16 on GPU at load", 3335, "53.1"],
+    ["v10", "lazy unpad fallback", 3335, "51.5"],
+    ["v11", "2-head k/v backward, single LoRA node", 2929, "55.6"],
+  ];
+  const tb = document.querySelector("#t-hist tbody");
+  hist.forEach(r => { const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${r[0]}</td><td>${r[1]}</td><td class="n">${fmt(r[2], "")}</td><td class="n">${r[3]}</td>`; tb.appendChild(tr); });
+
+  const svg = document.getElementById("c-hist");
+  const W = 860, H = 260, L = 52, R = 16, T = 14, B = 28;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const ymax = 16000, x = i => L + i * (W - L - R) / (hist.length - 1), y = v => T + (1 - v / ymax) * (H - T - B);
+  [0, 4000, 8000, 12000, 16000].forEach(t => {
+    el("line", { x1: L, x2: W - R, y1: y(t), y2: y(t), stroke: "var(--grid)", "stroke-width": 1 }, svg);
+    el("text", { x: L - 8, y: y(t) + 4, "text-anchor": "end", fill: "var(--muted)", "font-size": 12 }, svg).textContent = t ? (t / 1000) + "k" : "0";
+  });
+  el("polyline", { points: hist.map((r, i) => `${x(i)},${y(r[2])}`).join(" "), fill: "none", stroke: "var(--accent)", "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+  hist.forEach((r, i) => {
+    el("text", { x: x(i), y: H - 8, "text-anchor": "middle", fill: "var(--muted)", "font-size": 12 }, svg).textContent = r[0];
+    el("circle", { cx: x(i), cy: y(r[2]), r: 4.5, fill: "var(--accent)", stroke: "var(--surface)", "stroke-width": 2 }, svg);
+    const hit = el("rect", { x: x(i) - 20, y: T, width: 40, height: H - T - B, fill: "transparent" }, svg);
+    hover(hit, `${r[0]} · ${r[1]}: ${fmt(r[2], " MiB")}, ${r[3]} s`);
+  });
+  [[0, "14 345"], [hist.length - 1, "2 929"]].forEach(([i, s]) => {
+    el("text", { x: x(i) + (i ? -8 : 8), y: y(hist[i][2]) - (i ? 22 : 10), "text-anchor": i ? "end" : "start", fill: "var(--text)", "font-size": 13, "font-weight": 700 }, svg).textContent = s + " MiB";
+  });
+})();
+</script>
+</body>
+</html>
